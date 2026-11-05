@@ -56,9 +56,9 @@ public class MainActivity extends Activity {
                 for (String part : BLOCKED_PARTS) {
                     if (url.contains(part)) {
                         return new WebResourceResponse(
-                                "application/json", "UTF-8", 403, "Blocked",
+                                "application/json", "UTF-8", 200, "OK",
                                 new HashMap<String, String>(),
-                                new ByteArrayInputStream(new byte[0]));
+                                new ByteArrayInputStream("{}".getBytes()));
                     }
                 }
                 return super.shouldInterceptRequest(view, request);
