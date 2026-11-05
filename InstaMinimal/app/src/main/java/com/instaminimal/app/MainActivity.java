@@ -18,14 +18,13 @@ public class MainActivity extends Activity {
 
     private static final String START_URL = "https://www.instagram.com/direct/inbox/";
 
-    // Requests whose URL contains any of these are dropped, so the feed,
-    // reels and explore are never downloaded. Edit this list to tune it.
-    // (Do NOT add video file types: that would break reels sent in DMs.)
     private static final String[] BLOCKED_PARTS = {
-            "feed/timeline",
-            "/clips/",
-            "/discover/"
-    };
+        "feed/timeline",
+        "/clips/",
+        "/discover/",
+        "/ajax/bz",
+        "logging_client_events"
+};
 
     private WebView web;
     private String blockerJs = "";
