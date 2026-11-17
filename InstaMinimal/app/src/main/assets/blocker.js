@@ -47,7 +47,25 @@
   const style = document.createElement('style');
   style.textContent = 'html.ig-home article { display: none !important; }';
   document.head.appendChild(style);
+function lockReelScroll() {
+    document.querySelectorAll('div[role="dialog"]').forEach(dialog => {
+      if (dialog.querySelector('video')) {
+        dialog.style.overflow = 'hidden';
+        
+        const block = e => {
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+        };
 
+        if (!dialog.dataset.scrollLocked) {
+          dialog.dataset.scrollLocked = 'true';
+          dialog.addEventListener('wheel', block, { passive: false, capture: true });
+          dialog.addEventListener('touchmove', block, { passive: false, capture: true });
+          dialog.addEventListener('scroll', block, { passive: false, capture: true });
+        }
+      }
+    });
+  }
   setInterval(() => {
     guard();
     document.documentElement.classList.toggle('ig-home', location.pathname === '/');
