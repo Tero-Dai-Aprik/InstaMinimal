@@ -37,6 +37,26 @@
       else { kid.style.flex = '1'; kid.style.display = 'flex'; kid.style.justifyContent = 'center'; }
     }
   }
+   if (dialog.dataset.scrollLocked) return;
+    dialog.dataset.scrollLocked = 'true';
+
+    const block = e => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+    };
+
+    dialog.addEventListener('wheel', block, {
+      passive: false,
+      capture: true
+    });
+
+    dialog.addEventListener('touchmove', block, {
+      passive: false,
+      capture: true
+    });
+  });
+}
     setInterval(() => {
     guard();
     document.documentElement.classList.toggle('ig-home', location.pathname === '/');
