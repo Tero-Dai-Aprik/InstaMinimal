@@ -1,37 +1,56 @@
-(function() {
-    'use strict';
+(function () {
+  if (window.__igBlocker) return;
+  window.__igBlocker = true;
 
-    // Target and restrict scroll/swipe behavior within Instagram's Reel viewer container
-    function restrictReelScroll() {
-        // Instagram typically renders modals or full-screen viewers using role="dialog" or sections
-        const containers = document.querySelectorAll('div[role="dialog"], section');
-        
-        containers.forEach(container => {
-            // Check if it's the reel viewer (contains a video player)
-            if (container.querySelector('video') || container.innerHTML.includes('reel')) {
-                // Prevent mouse wheel scrolling to adjacent reels
-                container.onwheel = function(e) {
-                    e.stopPropagation();
-                };
+  const USERNAME = 'idkaprik';
 
-                // Prevent touch-move event propagation to lock the current reel in place
-                container.ontouchmove = function(e) {
-                    e.stopPropagation();
-                }, { passive: true };
-            }
-        });
+  const BLOCKED = /^\/(reels|explore)\/?$/;
+  function guard() {
+    if (BLOCKED.test(location.pathname)) location.replace('/direct/inbox/');
+  }
+  guard();
+
+  function fixNav() {
+    const q = s => document.querySelector(s);
+    const home = q('a[href="/"]');
+    const inbox = q('a[href="/direct/inbox/"]');
+    if (!home || !inbox) return;
+    const profile = q('a[href="/' + USERNAME + '/"]');
+
+    let row = inbox.parentElement;
+    while (row && row !== document.body &&
+           !(row.contains(home) && (!profile || row.contains(profile)))) {
+      row = row.parentElement;
     }
+    if (!row || row === document.body) return;
 
-    // Observe dynamic DOM changes since Instagram loads reel views asynchronously via AJAX/React
-    const observer = new MutationObserver(() => {
-        restrictReelScroll();
-    });
+    const reels = q('a[href="/reels/"]');
+    const explore = q('a[href="/explore/"]');
 
-    observer.observe(document.body, {
-        childList: true,
-        subtree: true
-    });
+    row.style.display = 'flex';
+    row.style.justifyContent = 'space-evenly';
+    row.style.alignItems = 'center';
 
-    // Initial execution on window load
-    window.addEventListener('load', restrictReelScroll);
+    for (const kid of row.children) {
+      const hide = (reels && kid.contains(reels)) || (explore && kid.contains(explore));
+      if (hide) { kid.style.display = 'none'; }
+      else { kid.style.flex = '1'; kid.style.display = 'flex'; kid.style.justifyContent = 'center'; }
+    }
+  }
+    setInterval(() => {
+    guard();
+    document.documentElement.classList.toggle('ig-home', location.pathname === '/');
+    fixNav();
+    lockReelScroll();
+  }, 1000);
+
+  const style = document.createElement('style');
+  style.textContent = 'html.ig-home article { display: none !important; }';
+  document.head.appendChild(style);
+
+  setInterval(() => {
+    guard();
+    document.documentElement.classList.toggle('ig-home', location.pathname === '/');
+    fixNav();
+  }, 1000);
 })();
