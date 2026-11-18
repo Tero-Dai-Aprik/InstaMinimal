@@ -78,7 +78,7 @@
     document.documentElement.classList.toggle('ig-home', location.pathname === '/');
     fixNav();
     lockSingleReel();
-    // Tell the Android app whether a Reel is open, so it can lock vertical swipes
     try { if (window.IFNative) IFNative.setReelOpen(reelOpen()); } catch (e) {}
+    try { if (window.IFNative) IFNative.setOnHome(location.pathname === '/'); } catch (e) {}
   }, 1000);
 })();
