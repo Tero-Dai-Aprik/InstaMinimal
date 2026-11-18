@@ -33,6 +33,7 @@ public class MainActivity extends Activity {
 
     // Set by the script: true while a single Reel is open
     private static volatile boolean reelOpenFlag = false;
+    private static volatile boolean onHomeFlag = false;
     private static final Pattern REEL_URL = Pattern.compile("^https?://[^/]+/reels?/[^/?#]+.*");
 
     private LockableWebView web;
@@ -42,6 +43,10 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void setReelOpen(boolean open) {
             reelOpenFlag = open;
+        }
+        @JavascriptInterface
+        public void setOnHome(boolean home) {
+            onHomeFlag = home;
         }
     }
 
@@ -130,6 +135,12 @@ public class MainActivity extends Activity {
                                 new HashMap<String, String>(),
                                 new ByteArrayInputStream("{}".getBytes()));
                     }
+                }
+                if (onHomeFlag && url.contains(".mp4")) {
+                    return new WebResourceResponse(
+                            "video/mp4", "UTF-8", 200, "OK",
+                            new HashMap<String, String>(),
+                            new ByteArrayInputStream(new byte[0]));
                 }
                 return super.shouldInterceptRequest(view, request);
             }
