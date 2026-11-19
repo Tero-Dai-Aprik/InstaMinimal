@@ -124,7 +124,35 @@ public class MainActivity extends Activity {
 
         blockerJs = readAsset("blocker.js");
 
-        // Layout: the web view with a thin loading bar on top of it
+        final float d = getResources().getDisplayMetrics().density;
+
+        LinearLayout column = new LinearLayout(this);
+        column.setOrientation(LinearLayout.VERTICAL);
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setBackgroundColor(Color.parseColor("#0F172A"));
+        header.setPadding((int) (14 * d), 0, (int) (6 * d), 0);
+
+        TextView title = new TextView(this);
+        title.setText("InstaFlow");
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(16);
+        header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button focusBtn = new Button(this);
+        focusBtn.setText("Focus");
+        focusBtn.setAllCaps(false);
+        focusBtn.setTextColor(Color.WHITE);
+        focusBtn.setBackgroundColor(Color.TRANSPARENT);
+        focusBtn.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
+        header.addView(focusBtn, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        column.addView(header, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, (int) (40 * d)));
+
         FrameLayout root = new FrameLayout(this);
         web = new LockableWebView(this);
         root.addView(web, new FrameLayout.LayoutParams(
@@ -133,11 +161,12 @@ public class MainActivity extends Activity {
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setMax(100);
         progress.setVisibility(View.GONE);
-        int barHeight = (int) (3 * getResources().getDisplayMetrics().density);
         root.addView(progress, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, barHeight, Gravity.TOP));
-        setContentView(root);
+                ViewGroup.LayoutParams.MATCH_PARENT, (int) (3 * d), Gravity.TOP));
 
+        column.addView(root, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        setContentView(column);
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
