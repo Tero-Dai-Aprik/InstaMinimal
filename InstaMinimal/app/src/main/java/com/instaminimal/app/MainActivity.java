@@ -32,7 +32,7 @@ import java.util.HashMap;
 import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
-
+    
     private static final String START_URL = "https://www.instagram.com/direct/inbox/";
     private static final String OFFLINE_URL = "file:///android_asset/offline.html";
 
@@ -49,6 +49,8 @@ public class MainActivity extends Activity {
 
     private LockableWebView web;
     private ProgressBar progress;
+    private LockOverlayView lockOverlay;
+    private boolean unlockedForCurrentSession = false;
     private String blockerJs = "";
     private String failedUrl = null;
 
@@ -163,7 +165,14 @@ public class MainActivity extends Activity {
         progress.setVisibility(View.GONE);
         root.addView(progress, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, (int) (3 * d), Gravity.TOP));
-
+        FocusPrefs prefs = new FocusPrefs(this);
+        lockOverlay = new LockOverlayView(this, prefs, () -> {
+            unlockedForCurrentSession = true;
+            updateLockState();
+        });
+        lockOverlay.setVisibility(View.GONE);
+        root.addView(lockOverlay, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         column.addView(root, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(column);
@@ -221,6 +230,29 @@ public class MainActivity extends Activity {
         });
 
         web.loadUrl(START_URL);
+        }
+        private void updateLockState() {
+        FocusPrefs prefs = new FocusPrefs(this);
+        boolean active = prefs.activeNow();
+        if (!active) {
+            unlockedForCurrentSession = false;
+        }
+        boolean shouldLock = active && !unlockedForCurrentSession;
+        if (shouldLock) {
+            lockOverlay.configureForMode();
+            lockOverlay.setVisibility(View.VISIBLE);
+            if (web != null) web.onPause();
+        } else {
+            lockOverlay.stopTimers();
+            lockOverlay.setVisibility(View.GONE);
+            if (web != null) web.onResume();
+        }
+    }
+    
+    @Override
+    protected void onResume() {
+        super.onResume();
+        updateLockState();
     }
 
     private String readAsset(String name) {
