@@ -1,13 +1,17 @@
 package com.instaminimal.app;
-import android.content.Intent;
-import android.graphics.Color;
-import android.widget.Button;
-import android.widget.LinearLayout;
-import android.widget.TextView;
+
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.os.CountDownTimer;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -22,17 +26,26 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.TextView;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
-    
+
+    private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
+    private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
+
     private static final String START_URL = "https://www.instagram.com/direct/inbox/";
     private static final String OFFLINE_URL = "file:///android_asset/offline.html";
 
@@ -49,10 +62,24 @@ public class MainActivity extends Activity {
 
     private LockableWebView web;
     private ProgressBar progress;
-    private LockOverlayView lockOverlay;
-    private boolean unlockedForCurrentSession = false;
     private String blockerJs = "";
     private String failedUrl = null;
+
+    // Focus lock screen
+    private FocusPrefs prefs;
+    private LinearLayout lockView;
+    private TextView lockTitle, lockTime, lockBack, lockNote;
+    private Button lockBtn, lockCancelBtn;
+    private CountDownTimer unlockTimer;
+    private boolean webPaused = false;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable ticker = new Runnable() {
+        @Override
+        public void run() {
+            refreshLock();
+            handler.postDelayed(this, 1000);
+        }
+    };
 
     class Bridge {
         @JavascriptInterface
@@ -120,14 +147,186 @@ public class MainActivity extends Activity {
         }
     }
 
+    // ---------- small helpers ----------
+
+    private int dp(float v) {
+        return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private GradientDrawable rounded(String fill, int radiusDp) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(Color.parseColor(fill));
+        g.setCornerRadius(dp(radiusDp));
+        return g;
+    }
+
+    private TextView label(String s, int sp, boolean bold, String color) {
+        TextView t = new TextView(this);
+        t.setText(s);
+        t.setTextSize(sp);
+        t.setTextColor(Color.parseColor(color));
+        t.setGravity(Gravity.CENTER);
+        if (bold) t.setTypeface(null, Typeface.BOLD);
+        return t;
+    }
+
+    private Button lockButton(String s, String color) {
+        Button b = new Button(this);
+        b.setText(s);
+        b.setAllCaps(false);
+        b.setTextColor(Color.WHITE);
+        b.setTextSize(16);
+        b.setTypeface(null, Typeface.BOLD);
+        b.setBackground(rounded(color, 14));
+        return b;
+    }
+
+    private void addTo(LinearLayout parent, View child, int topDp, int widthPx) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(widthPx, WRAP);
+        p.topMargin = dp(topDp);
+        parent.addView(child, p);
+    }
+
+    private static String hms(long ms) {
+        long s = Math.max(0, (ms + 999) / 1000);
+        return String.format(Locale.US, "%02d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60);
+    }
+
+    private static String clock(long ms) {
+        return new SimpleDateFormat("HH:mm", Locale.US).format(new Date(ms));
+    }
+
+    // ---------- focus lock screen ----------
+
+    private LinearLayout buildLockView() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER);
+        box.setBackgroundColor(Color.parseColor("#0F172A"));
+        box.setPadding(dp(28), dp(28), dp(28), dp(28));
+        box.setClickable(true);   // swallow touches so nothing underneath can be used
+
+        lockTitle = label("Focus time", 28, true, "#FFFFFF");
+        lockTime = label("00:00:00", 54, true, "#2DD4BF");
+        lockBack = label("", 15, false, "#CBD5E1");
+        lockNote = label("", 14, false, "#94A3B8");
+        lockBtn = lockButton("Unlock", "#0F766E");
+        lockCancelBtn = lockButton("Cancel", "#334155");
+
+        addTo(box, lockTitle, 0, WRAP);
+        addTo(box, lockTime, 18, WRAP);
+        addTo(box, lockBack, 6, WRAP);
+        addTo(box, lockNote, 26, WRAP);
+        addTo(box, lockBtn, 22, dp(240));
+        addTo(box, lockCancelBtn, 12, dp(240));
+
+        lockBtn.setOnClickListener(view -> {
+            int mode = prefs.mode();
+            if (mode == FocusPrefs.EASY) {
+                doUnlock();
+            } else if (mode == FocusPrefs.MEDIUM) {
+                new AlertDialog.Builder(this)
+                        .setTitle("Are you sure?")
+                        .setMessage("You will have to wait 1 minute before Instagram unlocks.")
+                        .setPositiveButton("Yes, unlock", (dlg, w) -> startUnlockCountdown())
+                        .setNegativeButton("Keep focus", null)
+                        .show();
+            }
+        });
+
+        lockCancelBtn.setOnClickListener(view -> {
+            cancelUnlockTimer();
+            applyLockMode();
+        });
+
+        return box;
+    }
+
+    private void applyLockMode() {
+        int mode = prefs.mode();
+        lockCancelBtn.setVisibility(View.GONE);
+        if (mode == FocusPrefs.EASY) {
+            lockBtn.setText("Unlock");
+            lockBtn.setVisibility(View.VISIBLE);
+            lockNote.setText("Easy mode: you can unlock any time.");
+        } else if (mode == FocusPrefs.MEDIUM) {
+            lockBtn.setText("Unlock...");
+            lockBtn.setVisibility(View.VISIBLE);
+            lockNote.setText("Medium mode: confirm, then wait 1 minute.");
+        } else {
+            lockBtn.setVisibility(View.GONE);
+            lockNote.setText("Impossible mode: no unlocking until the timer ends.");
+        }
+    }
+
+    private void startUnlockCountdown() {
+        cancelUnlockTimer();
+        lockBtn.setVisibility(View.GONE);
+        lockCancelBtn.setVisibility(View.VISIBLE);
+        lockNote.setText("Unlocking in 01:00. Stay focused, or cancel.");
+        unlockTimer = new CountDownTimer(60000, 1000) {
+            @Override
+            public void onTick(long msLeft) {
+                lockNote.setText("Unlocking in " + hms(msLeft).substring(3) + ". Stay focused, or cancel.");
+            }
+
+            @Override
+            public void onFinish() {
+                unlockTimer = null;
+                doUnlock();
+            }
+        }.start();
+    }
+
+    private void cancelUnlockTimer() {
+        if (unlockTimer != null) {
+            unlockTimer.cancel();
+            unlockTimer = null;
+        }
+    }
+
+    private void doUnlock() {
+        cancelUnlockTimer();
+        prefs.unlock();
+        refreshLock();
+    }
+
+    private void refreshLock() {
+        long end = prefs.lockEndMs();
+        if (end <= 0) {
+            cancelUnlockTimer();
+            if (lockView.getVisibility() == View.VISIBLE) lockView.setVisibility(View.GONE);
+            if (webPaused) {
+                web.onResume();
+                webPaused = false;
+            }
+            return;
+        }
+
+        if (lockView.getVisibility() != View.VISIBLE) {
+            lockView.setVisibility(View.VISIBLE);
+        }
+        if (!webPaused) {
+            web.onPause();
+            webPaused = true;
+        }
+        if (unlockTimer == null) applyLockMode();
+
+        lockTitle.setText(prefs.sessionActive() ? "Study timer" : "Focus hours");
+        lockTime.setText(hms(end - System.currentTimeMillis()));
+        lockBack.setText("Instagram is back at " + clock(end));
+    }
+
+    // ---------- activity ----------
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        prefs = new FocusPrefs(this);
         blockerJs = readAsset("blocker.js");
 
-        final float d = getResources().getDisplayMetrics().density;
-
+        // Layout: a slim header, then the web view with a loading bar and the lock screen over it
         LinearLayout column = new LinearLayout(this);
         column.setOrientation(LinearLayout.VERTICAL);
 
@@ -135,47 +334,40 @@ public class MainActivity extends Activity {
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setBackgroundColor(Color.parseColor("#0F172A"));
-        header.setPadding((int) (14 * d), 0, (int) (6 * d), 0);
+        header.setPadding(dp(14), 0, dp(6), 0);
 
         TextView title = new TextView(this);
         title.setText("InstaFlow");
         title.setTextColor(Color.WHITE);
         title.setTextSize(16);
-        header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        header.addView(title, new LinearLayout.LayoutParams(0, WRAP, 1f));
 
         Button focusBtn = new Button(this);
         focusBtn.setText("Focus");
         focusBtn.setAllCaps(false);
         focusBtn.setTextColor(Color.WHITE);
         focusBtn.setBackgroundColor(Color.TRANSPARENT);
-        focusBtn.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
-        header.addView(focusBtn, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        focusBtn.setOnClickListener(view -> startActivity(new Intent(this, SettingsActivity.class)));
+        header.addView(focusBtn, new LinearLayout.LayoutParams(WRAP, MATCH));
 
-        column.addView(header, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, (int) (40 * d)));
+        column.addView(header, new LinearLayout.LayoutParams(MATCH, dp(40)));
 
         FrameLayout root = new FrameLayout(this);
         web = new LockableWebView(this);
-        root.addView(web, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        root.addView(web, new FrameLayout.LayoutParams(MATCH, MATCH));
 
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setMax(100);
         progress.setVisibility(View.GONE);
-        root.addView(progress, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, (int) (3 * d), Gravity.TOP));
-        FocusPrefs prefs = new FocusPrefs(this);
-        lockOverlay = new LockOverlayView(this, prefs, () -> {
-            unlockedForCurrentSession = true;
-            updateLockState();
-        });
-        lockOverlay.setVisibility(View.GONE);
-        root.addView(lockOverlay, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        column.addView(root, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        root.addView(progress, new FrameLayout.LayoutParams(MATCH, dp(3), Gravity.TOP));
+
+        lockView = buildLockView();
+        lockView.setVisibility(View.GONE);
+        root.addView(lockView, new FrameLayout.LayoutParams(MATCH, MATCH));
+
+        column.addView(root, new LinearLayout.LayoutParams(MATCH, 0, 1f));
         setContentView(column);
+
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
@@ -230,29 +422,20 @@ public class MainActivity extends Activity {
         });
 
         web.loadUrl(START_URL);
-        }
-        private void updateLockState() {
-        FocusPrefs prefs = new FocusPrefs(this);
-        boolean active = prefs.activeNow();
-        if (!active) {
-            unlockedForCurrentSession = false;
-        }
-        boolean shouldLock = active && !unlockedForCurrentSession;
-        if (shouldLock) {
-            lockOverlay.configureForMode();
-            lockOverlay.setVisibility(View.VISIBLE);
-            if (web != null) web.onPause();
-        } else {
-            lockOverlay.stopTimers();
-            lockOverlay.setVisibility(View.GONE);
-            if (web != null) web.onResume();
-        }
     }
-    
+
     @Override
     protected void onResume() {
         super.onResume();
-        updateLockState();
+        refreshLock();
+        handler.removeCallbacks(ticker);
+        handler.postDelayed(ticker, 1000);
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        handler.removeCallbacks(ticker);
     }
 
     private String readAsset(String name) {
@@ -269,7 +452,12 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (web != null && web.canGoBack()) web.goBack();
-        else super.onBackPressed();
+        if (lockView.getVisibility() == View.VISIBLE) {
+            moveTaskToBack(true);
+        } else if (web != null && web.canGoBack()) {
+            web.goBack();
+        } else {
+            super.onBackPressed();
+        }
     }
 }
