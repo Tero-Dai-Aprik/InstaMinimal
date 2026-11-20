@@ -1,5 +1,6 @@
 package com.instaminimal.app;
-
+import android.net.Uri;
+import android.webkit.ValueCallback;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
@@ -64,6 +65,8 @@ public class MainActivity extends Activity {
     private ProgressBar progress;
     private String blockerJs = "";
     private String failedUrl = null;
+    private ValueCallback<Uri[]> filePathCallback;
+    private static final int FILE_REQ = 1;
 
     // Focus lock screen
     private FocusPrefs prefs;
@@ -385,6 +388,19 @@ public class MainActivity extends Activity {
                 progress.setProgress(newProgress);
                 progress.setVisibility(newProgress >= 100 ? View.GONE : View.VISIBLE);
             }
+                        @Override
+            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback,
+                                             FileChooserParams params) {
+                if (filePathCallback != null) filePathCallback.onReceiveValue(null);
+                filePathCallback = callback;
+                try {
+                    startActivityForResult(params.createIntent(), FILE_REQ);
+                } catch (Exception e) {
+                    filePathCallback = null;
+                    return false;
+                }
+                return true;
+            }
         });
 
         web.setWebViewClient(new WebViewClient() {
@@ -423,7 +439,16 @@ public class MainActivity extends Activity {
 
         web.loadUrl(START_URL);
     }
-
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == FILE_REQ && filePathCallback != null) {
+            filePathCallback.onReceiveValue(
+                    WebChromeClient.FileChooserParams.parseResult(resultCode, data));
+            filePathCallback = null;
+            return;
+        }
+        super.onActivityResult(requestCode, resultCode, data);
+    }
     @Override
     protected void onResume() {
         super.onResume();
