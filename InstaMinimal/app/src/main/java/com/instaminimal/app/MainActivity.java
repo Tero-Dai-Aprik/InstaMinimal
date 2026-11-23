@@ -1,18 +1,24 @@
 package com.instaminimal.app;
-import android.net.Uri;
-import android.webkit.ValueCallback;
+
+import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.CountDownTimer;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.MediaStore;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -20,6 +26,8 @@ import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.PermissionRequest;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -61,12 +69,18 @@ public class MainActivity extends Activity {
     private static volatile boolean reelOpenFlag = false;
     private static final Pattern REEL_URL = Pattern.compile("^https?://[^/]+/reels?/[^/?#]+.*");
 
+    private static final int FILE_REQ = 1;
+    private static final int MIC_REQ = 2;
+
     private LockableWebView web;
     private ProgressBar progress;
     private String blockerJs = "";
     private String failedUrl = null;
+
+    // Photos, camera and microphone
     private ValueCallback<Uri[]> filePathCallback;
-    private static final int FILE_REQ = 1;
+    private Uri cameraUri;
+    private PermissionRequest pendingMicRequest;
 
     // Focus lock screen
     private FocusPrefs prefs;
@@ -197,6 +211,85 @@ public class MainActivity extends Activity {
 
     private static String clock(long ms) {
         return new SimpleDateFormat("HH:mm", Locale.US).format(new Date(ms));
+    }
+
+    // ---------- photos and camera ----------
+
+    private boolean acceptsImages(WebChromeClient.FileChooserParams params) {
+        String[] types = params.getAcceptTypes();
+        if (types == null || types.length == 0) return true;
+        for (String t : types) {
+            if (t == null || t.trim().isEmpty() || t.contains("image") || t.contains("*/*")) return true;
+        }
+        return false;
+    }
+
+    // An intent for Android's own camera app that saves into Pictures/InstaFlow
+    private Intent buildCameraIntent() {
+        try {
+            ContentValues cv = new ContentValues();
+            cv.put(MediaStore.Images.Media.DISPLAY_NAME, "InstaFlow_" + System.currentTimeMillis() + ".jpg");
+            cv.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+            if (Build.VERSION.SDK_INT >= 29) {
+                cv.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/InstaFlow");
+            }
+            cameraUri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv);
+            if (cameraUri == null) return null;
+
+            Intent cam = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+            cam.putExtra(MediaStore.EXTRA_OUTPUT, cameraUri);
+            cam.setClipData(ClipData.newRawUri("", cameraUri));
+            cam.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            return cam;
+        } catch (Exception e) {
+            cameraUri = null;   // for example on older Android versions: no camera option
+            return null;
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == FILE_REQ) {
+            boolean hasPicked = data != null && (data.getData() != null || data.getClipData() != null);
+            boolean cameraUsed = resultCode == RESULT_OK && !hasPicked && cameraUri != null;
+
+            if (filePathCallback != null) {
+                Uri[] result = null;
+                if (resultCode == RESULT_OK) {
+                    if (hasPicked) {
+                        result = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
+                    } else if (cameraUri != null) {
+                        result = new Uri[]{cameraUri};
+                    }
+                }
+                filePathCallback.onReceiveValue(result);
+                filePathCallback = null;
+            }
+
+            // If the camera was not used, remove the empty picture entry we created for it
+            if (cameraUri != null && !cameraUsed) {
+                try {
+                    getContentResolver().delete(cameraUri, null, null);
+                } catch (Exception ignored) {
+                }
+            }
+            cameraUri = null;
+            return;
+        }
+        super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == MIC_REQ && pendingMicRequest != null) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                pendingMicRequest.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+            } else {
+                pendingMicRequest.deny();
+            }
+            pendingMicRequest = null;
+        }
     }
 
     // ---------- focus lock screen ----------
@@ -388,18 +481,51 @@ public class MainActivity extends Activity {
                 progress.setProgress(newProgress);
                 progress.setVisibility(newProgress >= 100 ? View.GONE : View.VISIBLE);
             }
-                        @Override
+
+            // Photo button: gallery or files, plus a Camera option
+            @Override
             public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback,
                                              FileChooserParams params) {
                 if (filePathCallback != null) filePathCallback.onReceiveValue(null);
                 filePathCallback = callback;
+                cameraUri = null;
+
+                Intent chooser = new Intent(Intent.ACTION_CHOOSER);
+                chooser.putExtra(Intent.EXTRA_INTENT, params.createIntent());
+                chooser.putExtra(Intent.EXTRA_TITLE, "Choose a photo or take one");
+
+                if (acceptsImages(params)) {
+                    Intent cam = buildCameraIntent();
+                    if (cam != null) chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{cam});
+                }
+
                 try {
-                    startActivityForResult(params.createIntent(), FILE_REQ);
+                    startActivityForResult(chooser, FILE_REQ);
                 } catch (Exception e) {
                     filePathCallback = null;
+                    cameraUri = null;
                     return false;
                 }
                 return true;
+            }
+
+            // Microphone for voice messages (only the microphone is ever allowed)
+            @Override
+            public void onPermissionRequest(final PermissionRequest request) {
+                boolean wantsMic = false;
+                for (String r : request.getResources()) {
+                    if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(r)) wantsMic = true;
+                }
+                if (!wantsMic) {
+                    request.deny();
+                    return;
+                }
+                if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                    request.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+                } else {
+                    pendingMicRequest = request;
+                    requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, MIC_REQ);
+                }
             }
         });
 
@@ -439,16 +565,7 @@ public class MainActivity extends Activity {
 
         web.loadUrl(START_URL);
     }
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        if (requestCode == FILE_REQ && filePathCallback != null) {
-            filePathCallback.onReceiveValue(
-                    WebChromeClient.FileChooserParams.parseResult(resultCode, data));
-            filePathCallback = null;
-            return;
-        }
-        super.onActivityResult(requestCode, resultCode, data);
-    }
+
     @Override
     protected void onResume() {
         super.onResume();
