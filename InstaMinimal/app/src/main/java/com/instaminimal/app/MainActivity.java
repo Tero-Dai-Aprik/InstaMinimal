@@ -223,7 +223,39 @@ public class MainActivity extends Activity {
         }
         return false;
     }
+        private void launchGallery(WebChromeClient.FileChooserParams params) {
+        try {
+            startActivityForResult(params.createIntent(), FILE_REQ);
+        } catch (Exception e) {
+            cancelFileChooser();
+        }
+    }
 
+    private void launchCamera(WebChromeClient.FileChooserParams params) {
+        Intent cam = buildCameraIntent();
+        if (cam == null) {
+            Toast.makeText(this, "Camera is not available here. Choose from gallery instead.",
+                    Toast.LENGTH_LONG).show();
+            launchGallery(params);
+            return;
+        }
+        try {
+            startActivityForResult(cam, FILE_REQ);
+        } catch (Exception e) {
+            cameraUri = null;
+            Toast.makeText(this, "Could not open the camera. Choose from gallery instead.",
+                    Toast.LENGTH_LONG).show();
+            launchGallery(params);
+        }
+    }
+
+    private void cancelFileChooser() {
+        if (filePathCallback != null) {
+            filePathCallback.onReceiveValue(null);
+            filePathCallback = null;
+        }
+        cameraUri = null;
+    }
     // An intent for Android's own camera app that saves into Pictures/InstaFlow
     private Intent buildCameraIntent() {
         try {
@@ -483,6 +515,7 @@ public class MainActivity extends Activity {
             }
 
             // Photo button: gallery or files, plus a Camera option
+                        // Photo button: our own menu, so the camera is always offered
             @Override
             public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback,
                                              FileChooserParams params) {
@@ -490,22 +523,19 @@ public class MainActivity extends Activity {
                 filePathCallback = callback;
                 cameraUri = null;
 
-                Intent chooser = new Intent(Intent.ACTION_CHOOSER);
-                chooser.putExtra(Intent.EXTRA_INTENT, params.createIntent());
-                chooser.putExtra(Intent.EXTRA_TITLE, "Choose a photo or take one");
-
-                if (acceptsImages(params)) {
-                    Intent cam = buildCameraIntent();
-                    if (cam != null) chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{cam});
+                if (!acceptsImages(params)) {
+                    launchGallery(params);
+                    return true;
                 }
 
-                try {
-                    startActivityForResult(chooser, FILE_REQ);
-                } catch (Exception e) {
-                    filePathCallback = null;
-                    cameraUri = null;
-                    return false;
-                }
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("Add a photo")
+                        .setItems(new String[]{"Take a photo", "Choose from gallery"}, (dlg, which) -> {
+                            if (which == 0) launchCamera(params);
+                            else launchGallery(params);
+                        })
+                        .setOnCancelListener(dlg -> cancelFileChooser())
+                        .show();
                 return true;
             }
 
