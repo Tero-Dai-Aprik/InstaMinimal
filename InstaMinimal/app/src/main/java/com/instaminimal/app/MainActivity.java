@@ -294,6 +294,7 @@ public class MainActivity extends Activity {
                         result = new Uri[]{cameraUri};
                     }
                 }
+                if (result != null) Toast.makeText(this, "Photo ready: " + result.length + " file(s)", Toast.LENGTH_SHORT).show();
                 filePathCallback.onReceiveValue(result);
                 filePathCallback = null;
             }
