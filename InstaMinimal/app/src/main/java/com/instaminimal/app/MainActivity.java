@@ -585,7 +585,28 @@ public class MainActivity extends Activity {
                 view.evaluateJavascript(blockerJs, null);
             }
 
+                       @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (request.isForMainFrame()) {
+                    failedUrl = request.getUrl().toString();
+                    view.loadUrl(OFFLINE_URL);
+                } else if ("POST".equals(request.getMethod())) {
+                    Toast.makeText(MainActivity.this,
+                            "DEBUG error: " + error.getDescription() + " " + request.getUrl().getPath(),
+                            Toast.LENGTH_LONG).show();
+                }
+            }
+
             @Override
+            public void onReceivedHttpError(WebView view, WebResourceRequest request,
+                                            WebResourceResponse errorResponse) {
+                String path = request.getUrl().getPath();
+                if ("POST".equals(request.getMethod()) || (path != null && path.contains("upload"))) {
+                    Toast.makeText(MainActivity.this,
+                            "DEBUG HTTP " + errorResponse.getStatusCode() + " " + path,
+                            Toast.LENGTH_LONG).show();
+                }
+            } @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame()) {
                     failedUrl = request.getUrl().toString();
