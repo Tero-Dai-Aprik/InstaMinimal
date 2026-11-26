@@ -24,6 +24,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
+import android.webkit.ConsoleMessage;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
@@ -39,6 +40,7 @@ import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -46,6 +48,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Locale;
@@ -82,6 +85,9 @@ public class MainActivity extends Activity {
     private ValueCallback<Uri[]> filePathCallback;
     private Uri cameraUri;
     private PermissionRequest pendingMicRequest;
+
+    // Debug log (shown with the Debug button)
+    private final ArrayList<String> debugLog = new ArrayList<>();
 
     // Focus lock screen
     private FocusPrefs prefs;
@@ -214,6 +220,40 @@ public class MainActivity extends Activity {
         return new SimpleDateFormat("HH:mm", Locale.US).format(new Date(ms));
     }
 
+    // ---------- debug log ----------
+
+    private synchronized void log(String s) {
+        debugLog.add(s.length() > 160 ? s.substring(0, 160) : s);
+        while (debugLog.size() > 40) debugLog.remove(0);
+    }
+
+    private synchronized String logText() {
+        if (debugLog.isEmpty()) return "(nothing logged yet)";
+        StringBuilder sb = new StringBuilder();
+        for (String line : debugLog) sb.append(line).append("\n\n");
+        return sb.toString();
+    }
+
+    private synchronized void clearLog() {
+        debugLog.clear();
+    }
+
+    private void showDebug() {
+        ScrollView sv = new ScrollView(this);
+        TextView tv = new TextView(this);
+        tv.setText(logText());
+        tv.setTextSize(12);
+        tv.setTextIsSelectable(true);
+        tv.setPadding(dp(16), dp(12), dp(16), dp(12));
+        sv.addView(tv);
+        new AlertDialog.Builder(this)
+                .setTitle("Debug log")
+                .setView(sv)
+                .setPositiveButton("Close", null)
+                .setNeutralButton("Clear", (dlg, w) -> clearLog())
+                .show();
+    }
+
     // ---------- photos and camera ----------
 
     private boolean acceptsImages(WebChromeClient.FileChooserParams params) {
@@ -297,8 +337,12 @@ public class MainActivity extends Activity {
                         result = new Uri[]{cameraUri};
                     }
                 }
-                // TEMPORARY check: remove this line once photos send correctly
-                if (result != null) Toast.makeText(this, "Photo ready: " + result.length + " file(s)", Toast.LENGTH_SHORT).show();
+                if (result != null && result.length > 0) {
+                    log("chooser: " + result.length + " file(s), type="
+                            + getContentResolver().getType(result[0]) + " uri=" + result[0]);
+                } else {
+                    log("chooser: no file returned (resultCode=" + resultCode + ")");
+                }
                 filePathCallback.onReceiveValue(result);
                 filePathCallback = null;
             }
@@ -475,6 +519,15 @@ public class MainActivity extends Activity {
         title.setTextSize(16);
         header.addView(title, new LinearLayout.LayoutParams(0, WRAP, 1f));
 
+        Button debugBtn = new Button(this);
+        debugBtn.setText("Debug");
+        debugBtn.setAllCaps(false);
+        debugBtn.setTextColor(Color.parseColor("#94A3B8"));
+        debugBtn.setTextSize(12);
+        debugBtn.setBackgroundColor(Color.TRANSPARENT);
+        debugBtn.setOnClickListener(view -> showDebug());
+        header.addView(debugBtn, new LinearLayout.LayoutParams(WRAP, MATCH));
+
         Button focusBtn = new Button(this);
         focusBtn.setText("Focus");
         focusBtn.setAllCaps(false);
@@ -504,8 +557,6 @@ public class MainActivity extends Activity {
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
-        // EXPERIMENT: makes the WebView look like normal Chrome. If login or chats break, delete this line.
-        s.setUserAgentString(s.getUserAgentString().replace("; wv", ""));
 
         CookieManager cm = CookieManager.getInstance();
         cm.setAcceptCookie(true);
@@ -519,6 +570,21 @@ public class MainActivity extends Activity {
             public void onProgressChanged(WebView view, int newProgress) {
                 progress.setProgress(newProgress);
                 progress.setVisibility(newProgress >= 100 ? View.GONE : View.VISIBLE);
+            }
+
+            // Only upload-related JavaScript errors go into the debug log (the rest is noise)
+            @Override
+            public boolean onConsoleMessage(ConsoleMessage m) {
+                if (m.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                    String msg = String.valueOf(m.message());
+                    String low = msg.toLowerCase(Locale.US);
+                    if (low.contains("upload") || low.contains("photo") || low.contains("image")
+                            || low.contains("file") || low.contains("send") || low.contains("denied")
+                            || low.contains("blocked") || low.contains("cors")) {
+                        log("JS error: " + msg);
+                    }
+                }
+                return super.onConsoleMessage(m);
             }
 
             // Photo button: our own menu, so the camera is always offered
@@ -569,13 +635,19 @@ public class MainActivity extends Activity {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
+                String path = String.valueOf(request.getUrl().getPath());
                 for (String part : BLOCKED_PARTS) {
                     if (url.contains(part)) {
+                        log("blocked: " + path);
                         return new WebResourceResponse(
                                 "application/json", "UTF-8", 200, "OK",
                                 new HashMap<String, String>(),
                                 new ByteArrayInputStream("{}".getBytes()));
                     }
+                }
+                if ("POST".equals(request.getMethod())
+                        && (path.contains("upload") || path.contains("direct") || path.contains("broadcast"))) {
+                    log("POST " + path);
                 }
                 return super.shouldInterceptRequest(view, request);
             }
@@ -595,23 +667,18 @@ public class MainActivity extends Activity {
                 if (request.isForMainFrame()) {
                     failedUrl = request.getUrl().toString();
                     view.loadUrl(OFFLINE_URL);
-                } else if ("POST".equals(request.getMethod())) {
-                    // TEMPORARY debug message
-                    Toast.makeText(MainActivity.this,
-                            "DEBUG error: " + error.getDescription() + " " + request.getUrl().getPath(),
-                            Toast.LENGTH_LONG).show();
+                } else {
+                    log("ERR " + request.getMethod() + " " + error.getDescription()
+                            + " " + request.getUrl().getPath());
                 }
             }
 
             @Override
             public void onReceivedHttpError(WebView view, WebResourceRequest request,
                                             WebResourceResponse errorResponse) {
-                // TEMPORARY debug message
-                String path = request.getUrl().getPath();
-                if ("POST".equals(request.getMethod()) || (path != null && path.contains("upload"))) {
-                    Toast.makeText(MainActivity.this,
-                            "DEBUG HTTP " + errorResponse.getStatusCode() + " " + path,
-                            Toast.LENGTH_LONG).show();
+                if (errorResponse.getStatusCode() >= 400) {
+                    log("HTTP " + errorResponse.getStatusCode() + " " + request.getMethod()
+                            + " " + request.getUrl().getPath());
                 }
             }
         });
