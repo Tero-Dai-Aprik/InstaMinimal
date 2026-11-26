@@ -325,25 +325,49 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == FILE_REQ) {
-            boolean hasPicked = data != null && (data.getData() != null || data.getClipData() != null);
-            boolean cameraUsed = resultCode == RESULT_OK && !hasPicked && cameraUri != null;
+            ArrayList<Uri> found = new ArrayList<>();
 
-            if (filePathCallback != null) {
-                Uri[] result = null;
-                if (resultCode == RESULT_OK) {
-                    if (hasPicked) {
-                        result = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
-                    } else if (cameraUri != null) {
-                        result = new Uri[]{cameraUri};
+            if (resultCode == RESULT_OK && data != null) {
+                if (data.getData() != null) found.add(data.getData());
+
+                ClipData clip = data.getClipData();
+                if (clip != null) {
+                    for (int i = 0; i < clip.getItemCount(); i++) {
+                        Uri u = clip.getItemAt(i).getUri();
+                        if (u != null && !found.contains(u)) found.add(u);
                     }
                 }
-                if (result != null && result.length > 0) {
-                    log("chooser: " + result.length + " file(s), type="
-                            + getContentResolver().getType(result[0]) + " uri=" + result[0]);
-                } else {
-                    log("chooser: no file returned (resultCode=" + resultCode + ")");
+
+                try {
+                    Uri stream = data.getParcelableExtra(Intent.EXTRA_STREAM);
+                    if (stream != null && !found.contains(stream)) found.add(stream);
+                } catch (Exception ignored) {
                 }
-                filePathCallback.onReceiveValue(result);
+            }
+
+            // Camera apps often return nothing but "OK": the photo is at the address we gave them
+            boolean cameraUsed = false;
+            if (found.isEmpty() && resultCode == RESULT_OK && cameraUri != null) {
+                found.add(cameraUri);
+                cameraUsed = true;
+            }
+
+            // Debug: show exactly what came back
+            String extras = "none";
+            try {
+                if (data != null && data.getExtras() != null) extras = data.getExtras().keySet().toString();
+            } catch (Exception ignored) {
+            }
+            log("chooser: resultCode=" + resultCode
+                    + ", data=" + (data == null ? "null" : String.valueOf(data.getData()))
+                    + ", clip=" + (data == null || data.getClipData() == null ? "none" : data.getClipData().getItemCount() + " item(s)")
+                    + ", extras=" + extras
+                    + ", camera=" + cameraUsed
+                    + ", files=" + found.size()
+                    + (found.isEmpty() ? "" : ", type=" + getContentResolver().getType(found.get(0))));
+
+            if (filePathCallback != null) {
+                filePathCallback.onReceiveValue(found.isEmpty() ? null : found.toArray(new Uri[0]));
                 filePathCallback = null;
             }
 
