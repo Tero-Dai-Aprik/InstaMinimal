@@ -40,6 +40,7 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -223,7 +224,8 @@ public class MainActivity extends Activity {
         }
         return false;
     }
-        private void launchGallery(WebChromeClient.FileChooserParams params) {
+
+    private void launchGallery(WebChromeClient.FileChooserParams params) {
         try {
             startActivityForResult(params.createIntent(), FILE_REQ);
         } catch (Exception e) {
@@ -256,6 +258,7 @@ public class MainActivity extends Activity {
         }
         cameraUri = null;
     }
+
     // An intent for Android's own camera app that saves into Pictures/InstaFlow
     private Intent buildCameraIntent() {
         try {
@@ -294,6 +297,7 @@ public class MainActivity extends Activity {
                         result = new Uri[]{cameraUri};
                     }
                 }
+                // TEMPORARY check: remove this line once photos send correctly
                 if (result != null) Toast.makeText(this, "Photo ready: " + result.length + " file(s)", Toast.LENGTH_SHORT).show();
                 filePathCallback.onReceiveValue(result);
                 filePathCallback = null;
@@ -500,6 +504,8 @@ public class MainActivity extends Activity {
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
+        // EXPERIMENT: makes the WebView look like normal Chrome. If login or chats break, delete this line.
+        s.setUserAgentString(s.getUserAgentString().replace("; wv", ""));
 
         CookieManager cm = CookieManager.getInstance();
         cm.setAcceptCookie(true);
@@ -515,8 +521,7 @@ public class MainActivity extends Activity {
                 progress.setVisibility(newProgress >= 100 ? View.GONE : View.VISIBLE);
             }
 
-            // Photo button: gallery or files, plus a Camera option
-                        // Photo button: our own menu, so the camera is always offered
+            // Photo button: our own menu, so the camera is always offered
             @Override
             public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback,
                                              FileChooserParams params) {
@@ -585,12 +590,13 @@ public class MainActivity extends Activity {
                 view.evaluateJavascript(blockerJs, null);
             }
 
-                       @Override
+            @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame()) {
                     failedUrl = request.getUrl().toString();
                     view.loadUrl(OFFLINE_URL);
                 } else if ("POST".equals(request.getMethod())) {
+                    // TEMPORARY debug message
                     Toast.makeText(MainActivity.this,
                             "DEBUG error: " + error.getDescription() + " " + request.getUrl().getPath(),
                             Toast.LENGTH_LONG).show();
@@ -600,17 +606,12 @@ public class MainActivity extends Activity {
             @Override
             public void onReceivedHttpError(WebView view, WebResourceRequest request,
                                             WebResourceResponse errorResponse) {
+                // TEMPORARY debug message
                 String path = request.getUrl().getPath();
                 if ("POST".equals(request.getMethod()) || (path != null && path.contains("upload"))) {
                     Toast.makeText(MainActivity.this,
                             "DEBUG HTTP " + errorResponse.getStatusCode() + " " + path,
                             Toast.LENGTH_LONG).show();
-                }
-            } @Override
-            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame()) {
-                    failedUrl = request.getUrl().toString();
-                    view.loadUrl(OFFLINE_URL);
                 }
             }
         });
