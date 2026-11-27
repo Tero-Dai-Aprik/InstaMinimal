@@ -18,6 +18,7 @@ import android.os.Bundle;
 import android.os.CountDownTimer;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.MediaStore;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -62,22 +63,30 @@ public class MainActivity extends Activity {
     private static final String START_URL = "https://www.instagram.com/direct/inbox/";
     private static final String OFFLINE_URL = "file:///android_asset/offline.html";
 
-    // Requests containing any of these words are dropped.
-    private static final String[] BLOCKED_PARTS = {
+    // Always dropped
+    private static final String[] ALWAYS_BLOCKED = {
             "feed/timeline",
-            "/clips/",
             "/discover/"
+    };
+    // Dropped unless Reel time is running
+    private static final String[] REELS_BLOCKED = {
+            "/clips/"
     };
 
     // Set by the script: true while a single Reel is open
     private static volatile boolean reelOpenFlag = false;
+    // True while the user is spending earned Reel time
+    private static volatile boolean reelsAllowed = false;
+
     private static final Pattern REEL_URL = Pattern.compile("^https?://[^/]+/reels?/[^/?#]+.*");
+    private static final Pattern FEED_URL = Pattern.compile("^https?://[^/]+/(reels|explore)/?([?#].*)?$");
 
     private static final int FILE_REQ = 1;
     private static final int MIC_REQ = 2;
 
     private LockableWebView web;
     private ProgressBar progress;
+    private Button reelsBtn;
     private String blockerJs = "";
     private String failedUrl = null;
 
@@ -85,6 +94,9 @@ public class MainActivity extends Activity {
     private ValueCallback<Uri[]> filePathCallback;
     private Uri cameraUri;
     private PermissionRequest pendingMicRequest;
+
+    // Reel time counting (0 = not counting right now)
+    private long reelChunkStart = 0;
 
     // Debug log (shown with the Debug button)
     private final ArrayList<String> debugLog = new ArrayList<>();
@@ -101,6 +113,7 @@ public class MainActivity extends Activity {
         @Override
         public void run() {
             refreshLock();
+            updateReels();
             handler.postDelayed(this, 1000);
         }
     };
@@ -117,7 +130,8 @@ public class MainActivity extends Activity {
         }
     }
 
-    // A WebView that swallows vertical swipes while a Reel is open
+    // A WebView that swallows vertical swipes while a single Reel is open
+    // (but never while earned Reel time is running)
     static class LockableWebView extends WebView {
         private float startX, startY;
         private boolean locking = false;
@@ -129,6 +143,7 @@ public class MainActivity extends Activity {
         }
 
         private boolean reelActive() {
+            if (reelsAllowed) return false;
             String u = getUrl();
             return reelOpenFlag || (u != null && REEL_URL.matcher(u).matches());
         }
@@ -205,6 +220,19 @@ public class MainActivity extends Activity {
         return b;
     }
 
+    private Button headerButton(String s, String color, int sp) {
+        Button b = new Button(this);
+        b.setText(s);
+        b.setAllCaps(false);
+        b.setTextColor(Color.parseColor(color));
+        b.setTextSize(sp);
+        b.setBackgroundColor(Color.TRANSPARENT);
+        b.setMinWidth(0);
+        b.setMinimumWidth(0);
+        b.setPadding(dp(8), 0, dp(8), 0);
+        return b;
+    }
+
     private void addTo(LinearLayout parent, View child, int topDp, int widthPx) {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(widthPx, WRAP);
         p.topMargin = dp(topDp);
@@ -214,6 +242,11 @@ public class MainActivity extends Activity {
     private static String hms(long ms) {
         long s = Math.max(0, (ms + 999) / 1000);
         return String.format(Locale.US, "%02d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60);
+    }
+
+    private static String mmss(long ms) {
+        long s = Math.max(0, (ms + 999) / 1000);
+        return String.format(Locale.US, "%02d:%02d", s / 60, s % 60);
     }
 
     private static String clock(long ms) {
@@ -252,6 +285,121 @@ public class MainActivity extends Activity {
                 .setPositiveButton("Close", null)
                 .setNeutralButton("Clear", (dlg, w) -> clearLog())
                 .show();
+    }
+
+    // ---------- blocking rules ----------
+
+    private boolean isBlocked(String url) {
+        for (String part : ALWAYS_BLOCKED) {
+            if (url.contains(part)) return true;
+        }
+        if (!reelsAllowed) {
+            for (String part : REELS_BLOCKED) {
+                if (url.contains(part)) return true;
+            }
+        }
+        return false;
+    }
+
+    // ---------- Reel rewards ----------
+
+    private void setReelsAllowed(boolean b) {
+        if (reelsAllowed == b) return;
+        reelsAllowed = b;
+        web.evaluateJavascript("window.__igReelsAllowed=" + b + ";", null);
+        if (!b) {
+            // Reel time ended: leave the Reels page if we are on it
+            String u = web.getUrl();
+            if (u != null && FEED_URL.matcher(u).matches()) web.loadUrl(START_URL);
+        }
+    }
+
+    private void updateReelsButton() {
+        if (reelsBtn == null) return;
+        if (prefs.reelOn()) {
+            reelsBtn.setText("Reels " + mmss(prefs.reelLeftMs()));
+            reelsBtn.setTextColor(Color.parseColor("#2DD4BF"));
+        } else if (prefs.bankSec() > 0) {
+            reelsBtn.setText("Reels +" + mmss(prefs.bankSec() * 1000));
+            reelsBtn.setTextColor(Color.parseColor("#FBBF24"));
+        } else {
+            reelsBtn.setText("Reels");
+            reelsBtn.setTextColor(Color.parseColor("#64748B"));
+        }
+    }
+
+    // Called every second, and whenever something changes
+    private void updateReels() {
+        if (web == null || prefs == null) return;
+
+        // A finished study timer pays out into the bank
+        long earned = prefs.collectReward();
+        if (earned > 0) {
+            Toast.makeText(this, "Study session done! You earned " + mmss(earned * 1000)
+                    + " of Reel time.", Toast.LENGTH_LONG).show();
+        }
+
+        // Time only counts while the app is open and not covered by the focus lock
+        boolean focusLocked = prefs.lockEndMs() > 0;
+        boolean counting = prefs.reelOn() && !focusLocked;
+
+        if (counting) {
+            long now = SystemClock.elapsedRealtime();
+            if (reelChunkStart > 0) {
+                long left = prefs.reelLeftMs() - (now - reelChunkStart);
+                prefs.setReelLeftMs(Math.max(0, left));
+            }
+            reelChunkStart = now;
+            if (prefs.reelLeftMs() <= 0) {
+                prefs.endReels();
+                reelChunkStart = 0;
+                Toast.makeText(this, "Reel time is up. Back to studying!", Toast.LENGTH_LONG).show();
+            }
+        } else {
+            reelChunkStart = 0;
+        }
+
+        setReelsAllowed(prefs.reelOn() && !focusLocked);
+        updateReelsButton();
+    }
+
+    private void showReelsDialog() {
+        if (prefs.lockEndMs() > 0) {
+            Toast.makeText(this, "Instagram is locked right now.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (prefs.reelOn()) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Reel time running")
+                    .setMessage(mmss(prefs.reelLeftMs()) + " left. Stopping saves the rest for later.")
+                    .setPositiveButton("Keep watching", null)
+                    .setNegativeButton("Stop and save", (dlg, w) -> {
+                        reelChunkStart = 0;
+                        prefs.stopReels(prefs.reelLeftMs());
+                        updateReels();
+                    })
+                    .show();
+        } else if (prefs.bankSec() > 0) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Watch Reels?")
+                    .setMessage("You have " + mmss(prefs.bankSec() * 1000)
+                            + " of Reel time. It only counts down while you are in the app.")
+                    .setPositiveButton("Start", (dlg, w) -> {
+                        prefs.startReels();
+                        updateReels();
+                    })
+                    .setNegativeButton("Not now", null)
+                    .show();
+        } else {
+            int rate = prefs.rewardRate();
+            new AlertDialog.Builder(this)
+                    .setTitle("No Reel time yet")
+                    .setMessage(rate > 0
+                            ? "Finish a focus timer to earn it: " + rate + " min of Reels for every hour of study."
+                            : "Reel rewards are off. Turn them on in Focus settings.")
+                    .setPositiveButton("OK", null)
+                    .show();
+        }
     }
 
     // ---------- photos and camera ----------
@@ -352,7 +500,6 @@ public class MainActivity extends Activity {
                 cameraUsed = true;
             }
 
-            // Debug: show exactly what came back
             String extras = "none";
             try {
                 if (data != null && data.getExtras() != null) extras = data.getExtras().keySet().toString();
@@ -490,6 +637,7 @@ public class MainActivity extends Activity {
         cancelUnlockTimer();
         prefs.unlock();
         refreshLock();
+        updateReels();
     }
 
     private void refreshLock() {
@@ -543,20 +691,15 @@ public class MainActivity extends Activity {
         title.setTextSize(16);
         header.addView(title, new LinearLayout.LayoutParams(0, WRAP, 1f));
 
-        Button debugBtn = new Button(this);
-        debugBtn.setText("Debug");
-        debugBtn.setAllCaps(false);
-        debugBtn.setTextColor(Color.parseColor("#94A3B8"));
-        debugBtn.setTextSize(12);
-        debugBtn.setBackgroundColor(Color.TRANSPARENT);
+        Button debugBtn = headerButton("Debug", "#64748B", 12);
         debugBtn.setOnClickListener(view -> showDebug());
         header.addView(debugBtn, new LinearLayout.LayoutParams(WRAP, MATCH));
 
-        Button focusBtn = new Button(this);
-        focusBtn.setText("Focus");
-        focusBtn.setAllCaps(false);
-        focusBtn.setTextColor(Color.WHITE);
-        focusBtn.setBackgroundColor(Color.TRANSPARENT);
+        reelsBtn = headerButton("Reels", "#64748B", 13);
+        reelsBtn.setOnClickListener(view -> showReelsDialog());
+        header.addView(reelsBtn, new LinearLayout.LayoutParams(WRAP, MATCH));
+
+        Button focusBtn = headerButton("Focus", "#FFFFFF", 14);
         focusBtn.setOnClickListener(view -> startActivity(new Intent(this, SettingsActivity.class)));
         header.addView(focusBtn, new LinearLayout.LayoutParams(WRAP, MATCH));
 
@@ -660,14 +803,12 @@ public class MainActivity extends Activity {
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
                 String path = String.valueOf(request.getUrl().getPath());
-                for (String part : BLOCKED_PARTS) {
-                    if (url.contains(part)) {
-                        log("blocked: " + path);
-                        return new WebResourceResponse(
-                                "application/json", "UTF-8", 200, "OK",
-                                new HashMap<String, String>(),
-                                new ByteArrayInputStream("{}".getBytes()));
-                    }
+                if (isBlocked(url)) {
+                    log("blocked: " + path);
+                    return new WebResourceResponse(
+                            "application/json", "UTF-8", 200, "OK",
+                            new HashMap<String, String>(),
+                            new ByteArrayInputStream("{}".getBytes()));
                 }
                 if ("POST".equals(request.getMethod())
                         && (path.contains("upload") || path.contains("direct") || path.contains("broadcast"))) {
@@ -683,7 +824,7 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                view.evaluateJavascript(blockerJs, null);
+                view.evaluateJavascript("window.__igReelsAllowed=" + reelsAllowed + ";" + blockerJs, null);
             }
 
             @Override
@@ -714,6 +855,7 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         refreshLock();
+        updateReels();
         handler.removeCallbacks(ticker);
         handler.postDelayed(ticker, 1000);
     }
@@ -721,6 +863,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        reelChunkStart = 0;   // Reel time does not count while the app is in the background
         handler.removeCallbacks(ticker);
     }
 
