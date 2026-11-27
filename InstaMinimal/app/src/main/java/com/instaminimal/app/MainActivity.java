@@ -686,7 +686,7 @@ public class MainActivity extends Activity {
         header.setPadding(dp(14), 0, dp(6), 0);
 
         TextView title = new TextView(this);
-        title.setText("InstaFlow");
+        title.setText("InstaFlow Soft");
         title.setTextColor(Color.WHITE);
         title.setTextSize(16);
         header.addView(title, new LinearLayout.LayoutParams(0, WRAP, 1f));
