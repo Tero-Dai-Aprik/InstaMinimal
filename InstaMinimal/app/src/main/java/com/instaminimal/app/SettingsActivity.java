@@ -48,6 +48,9 @@ public class SettingsActivity extends Activity {
     private Switch scheduleSwitch;
     private final LinearLayout[] modeRows = new LinearLayout[3];
     private final TextView[] chips = new TextView[5];
+    private static final int[] RATES = {0, 5, 10, 15};
+    private final TextView[] rateChips = new TextView[4];
+    private TextView rateInfo;
 
     // ---------- small helpers ----------
 
@@ -184,7 +187,18 @@ public class SettingsActivity extends Activity {
     }
 
     // ---------- screen ----------
-
+        private void refreshRates() {
+        int cur = prefs.rewardRate();
+        String[] labels = {"Off", "5 min", "10 min", "15 min"};
+        for (int i = 0; i < 4; i++) {
+            boolean sel = (RATES[i] == cur);
+            rateChips[i].setText(labels[i]);
+            rateChips[i].setBackground(rounded(sel ? ACCENT : "#162033", 12, sel ? TEAL : "#334155"));
+        }
+        rateInfo.setText(cur == 0
+                ? "Reel rewards are off."
+                : "Study for 1 hour with the focus timer and earn " + cur + " min of Reels.");
+    }
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -319,6 +333,28 @@ public class SettingsActivity extends Activity {
             }
         });
         timerCard.addView(startTimerBtn, lp(MATCH, WRAP, 14));
+
+                // ----- Reel rewards card -----
+        LinearLayout rewardCard = card(col, "Reel rewards");
+        rateInfo = leftText("", 13, false, MUTED);
+        rewardCard.addView(rateInfo, lp(MATCH, WRAP, 4));
+        LinearLayout rateRow = new LinearLayout(this);
+        rateRow.setOrientation(LinearLayout.HORIZONTAL);
+        for (int i = 0; i < 4; i++) {
+            final int idx = i;
+            TextView rateChip = text("", 14, true, "#FFFFFF");
+            rateChip.setPadding(0, dp(10), 0, dp(10));
+            rateChip.setOnClickListener(view -> {
+                if (locked) return;
+                prefs.setRewardRate(RATES[idx]);
+                refreshRates();
+            });
+            rateChips[i] = rateChip;
+            LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(0, WRAP, 1f);
+            rp.rightMargin = (i < 3) ? dp(6) : 0;
+            rateRow.addView(rateChip, rp);
+        }
+        rewardCard.addView(rateRow, lp(MATCH, WRAP, 12));
 
         // ----- Save and close -----
         if (!locked) {
