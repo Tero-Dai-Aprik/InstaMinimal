@@ -691,10 +691,6 @@ public class MainActivity extends Activity {
         title.setTextSize(16);
         header.addView(title, new LinearLayout.LayoutParams(0, WRAP, 1f));
 
-        Button debugBtn = headerButton("Debug", "#64748B", 12);
-        debugBtn.setOnClickListener(view -> showDebug());
-        header.addView(debugBtn, new LinearLayout.LayoutParams(WRAP, MATCH));
-
         reelsBtn = headerButton("Reels", "#64748B", 13);
         reelsBtn.setOnClickListener(view -> showReelsDialog());
         header.addView(reelsBtn, new LinearLayout.LayoutParams(WRAP, MATCH));
